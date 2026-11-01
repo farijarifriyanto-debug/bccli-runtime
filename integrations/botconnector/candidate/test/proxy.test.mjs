@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { normalizeZeroArgFunctionTools, startGatewayProxy } from '../proxy.mjs'
+import { PROVIDERS } from '../providers.mjs'
 import { GATEWAY } from '../core.mjs'
 
 test('proxy keeps real key upstream; Qwen gets an expiring local token', async () => {
@@ -131,4 +132,27 @@ test('nullable optional read_file fields become single types; required nullable 
   assert.deepEqual(props.multi.type, ['integer', 'string', 'null'])
   assert.deepEqual(parameters.properties.offset.type, ['integer', 'null'], 'original must be immutable')
   assert.strictEqual(normalizeZeroArgFunctionTools(normalized), normalized)
+})
+
+test('proxy sends OpenAI max_completion_tokens upstream instead of rejected max_tokens', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (_url, options) => {
+      seen.push(JSON.parse(options.body.toString()))
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    },
+  })
+  try {
+    const request = { model: 'gpt-6-luna', max_tokens: 64000, stream: true, messages: [{ role: 'user', content: 'hi' }] }
+    const result = await fetch(proxy.baseUrl + '/chat/completions', {
+      method: 'POST', headers: { authorization: 'Bearer ' + proxy.token, 'content-type': 'application/json' }, body: JSON.stringify(request),
+    })
+    assert.equal(result.status, 200)
+    assert.equal(seen.length, 1)
+    assert.equal(seen[0].max_completion_tokens, 4096)
+    assert.equal(Object.hasOwn(seen[0], 'max_tokens'), false)
+    assert.equal(seen[0].model, 'gpt-6-luna')
+  } finally { await proxy.close() }
 })

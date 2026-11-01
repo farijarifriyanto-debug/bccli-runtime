@@ -85,7 +85,7 @@ export function attachRuntimeModelContext(payload) {
 // output conservatively for coding-agent interoperability; never increase it.
 // This does not change the context window or input-token budget.
 const DEFAULT_OUTPUT_TOKEN_CEILING = 4096
-export function boundChatOutputTokens(payload) {
+export function boundChatOutputTokens(payload, { endpoint } = {}) {
   if (!payload || typeof payload !== 'object') return payload
   const legacy = payload.max_tokens
   const modern = payload.max_completion_tokens
@@ -94,7 +94,10 @@ export function boundChatOutputTokens(payload) {
   // Real Gateway's exact Kimi route rejects legacy max_tokens. Keep parity
   // with PAYG validation for positive decimal numeric strings, without
   // changing the output-ceiling policy for any other model.
-  if (payload.model === 'kimi-k2.7-code') {
+  // OpenAI's own API rejects max_tokens on current models while accepting
+  // max_completion_tokens on every model it serves, so match its endpoint
+  // rather than a model list that rots with each release.
+  if (payload.model === 'kimi-k2.7-code' || endpoint === PROVIDERS.openai.endpoint) {
     const parsed = (value) => {
       if (typeof value !== 'number' && !(typeof value === 'string' && /^[0-9]+$/.test(value))) return null
       const n = Number(value)
@@ -408,7 +411,7 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
           let parsed
           try { parsed = JSON.parse(body.toString('utf8')) }
           catch { fail(400, 'Invalid JSON request.'); return }
-          const normalized = boundChatOutputTokens(attachRuntimeModelContext(normalizeZeroArgFunctionTools(parsed)))
+          const normalized = boundChatOutputTokens(attachRuntimeModelContext(normalizeZeroArgFunctionTools(parsed)), { endpoint: active.endpoint })
           if (normalized !== parsed) body = Buffer.from(JSON.stringify(normalized))
         }
       }
