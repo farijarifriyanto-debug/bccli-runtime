@@ -134,6 +134,118 @@ test('nullable optional read_file fields become single types; required nullable 
   assert.strictEqual(normalizeZeroArgFunctionTools(normalized), normalized)
 })
 
+const OPENAI_TOOL_REASONING_REJECTION = "Function tools with reasoning_effort are not supported for gpt-6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'."
+const OPENAI_NONE_UNSUPPORTED = "Unsupported value: 'reasoning_effort' does not support 'none' with this model. Supported values are: 'low', 'medium', 'high', and 'xhigh'."
+const openAiRequest = {
+  model: 'gpt-6-luna', reasoning_effort: 'high', max_completion_tokens: 4096, stream: true,
+  messages: [{ role: 'user', content: 'hi' }],
+  tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } } }],
+}
+const postChat = (proxy, request = openAiRequest) => fetch(proxy.baseUrl + '/chat/completions', {
+  method: 'POST', headers: { authorization: 'Bearer ' + proxy.token, 'content-type': 'application/json' }, body: JSON.stringify(request),
+})
+const jsonError = (message) => new Response(JSON.stringify({ error: { message } }), { status: 400, headers: { 'content-type': 'application/json' } })
+
+test('proxy retries an OpenAI tool request with reasoning disabled after the chat-completions rejection', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body.toString())
+      seen.push(body)
+      if (body.reasoning_effort !== 'none') return jsonError(OPENAI_TOOL_REASONING_REJECTION)
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    },
+  })
+  try {
+    const result = await postChat(proxy)
+    assert.equal(result.status, 200)
+    assert.equal(await result.text(), 'data: [DONE]\n\n')
+    assert.equal(seen.length, 2)
+    assert.equal(seen[0].reasoning_effort, 'high')
+    assert.equal(seen[1].reasoning_effort, 'none')
+    assert.deepEqual(seen[1].tools, seen[0].tools)
+    assert.deepEqual(seen[1].messages, seen[0].messages)
+    assert.equal(seen[1].max_completion_tokens, 4096)
+    assert.equal(seen[1].model, 'gpt-6-luna')
+  } finally { await proxy.close() }
+})
+
+test('proxy retries with reasoning disabled even when the engine sent no reasoning_effort at all', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body.toString())
+      seen.push(body)
+      if (!Object.hasOwn(body, 'reasoning_effort')) return jsonError(OPENAI_TOOL_REASONING_REJECTION)
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    },
+  })
+  try {
+    const { reasoning_effort: _ignored, ...withoutReasoning } = openAiRequest
+    const result = await postChat(proxy, withoutReasoning)
+    assert.equal(result.status, 200)
+    assert.equal(seen.length, 2)
+    assert.equal(Object.hasOwn(seen[0], 'reasoning_effort'), false)
+    assert.equal(seen[1].reasoning_effort, 'none')
+  } finally { await proxy.close() }
+})
+
+test('proxy keeps the original OpenAI explanation when the reasoning-disabled retry is rejected too', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body.toString())
+      seen.push(body)
+      return jsonError(body.reasoning_effort === 'none' ? OPENAI_NONE_UNSUPPORTED : OPENAI_TOOL_REASONING_REJECTION)
+    },
+  })
+  try {
+    const result = await postChat(proxy)
+    assert.equal(result.status, 400)
+    const text = await result.text()
+    assert.match(text, /use \/v1\/responses/, 'the actionable upstream explanation must reach the user')
+    assert.doesNotMatch(text, /does not support 'none'/, 'the retry error must not replace the original one')
+    assert.equal(seen.length, 2)
+  } finally { await proxy.close() }
+})
+
+test('proxy forwards an unrelated OpenAI 400 body unchanged and does not retry', async () => {
+  const seen = []
+  const message = "Invalid value for 'temperature'."
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (_url, options) => { seen.push(JSON.parse(options.body.toString())); return jsonError(message) },
+  })
+  try {
+    const result = await postChat(proxy)
+    assert.equal(result.status, 400)
+    assert.match(await result.text(), /Invalid value for 'temperature'/)
+    assert.equal(seen.length, 1)
+  } finally { await proxy.close() }
+})
+
+test('proxy never retries the reasoning rejection for a non-OpenAI endpoint', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    fetchImpl: async (_url, options) => { seen.push(JSON.parse(options.body.toString())); return jsonError(OPENAI_TOOL_REASONING_REJECTION) },
+  })
+  try {
+    const result = await postChat(proxy)
+    assert.equal(result.status, 400)
+    assert.match(await result.text(), /Function tools with reasoning_effort/)
+    assert.equal(seen.length, 1, 'the gateway request must be sent exactly once')
+    assert.equal(seen[0].reasoning_effort, 'high')
+  } finally { await proxy.close() }
+})
+
 test('proxy sends OpenAI max_completion_tokens upstream instead of rejected max_tokens', async () => {
   const seen = []
   const proxy = await startGatewayProxy({

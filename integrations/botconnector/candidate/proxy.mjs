@@ -123,6 +123,22 @@ export function boundChatOutputTokens(payload, { endpoint } = {}) {
   return payload
 }
 
+// OpenAI refuses function tools together with a nonzero reasoning effort on
+// chat/completions, and the same request succeeds with reasoning disabled.
+// Which models refuse, and which accept 'none' at all, varies per model and
+// changes without notice, so the upstream rejection text is the only signal
+// used here; a retry that is rejected too leaves the original explanation
+// intact because that is the one that tells the user what to do.
+const OPENAI_TOOL_REASONING_REJECTION = /Function tools with reasoning_effort are not supported/
+function reasoningDisabledRetryBody(body, errorText) {
+  if (!OPENAI_TOOL_REASONING_REJECTION.test(errorText)) return null
+  let parsed
+  try { parsed = JSON.parse(body.toString('utf8')) }
+  catch { return null }
+  if (!parsed || typeof parsed !== 'object' || parsed.reasoning_effort === 'none') return null
+  return Buffer.from(JSON.stringify({ ...parsed, reasoning_effort: 'none' }))
+}
+
 function waitForDrainOrClose(res) {
   if (res.destroyed) return Promise.resolve()
   return new Promise((resolve) => {
@@ -418,7 +434,8 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
       inFlight += 1
       counted = true
       const destination = active
-      const upstream = await fetchImpl(destination.endpoint + req.url.slice(3), {
+      const upstreamUrl = destination.endpoint + req.url.slice(3)
+      const upstreamInit = {
         method,
         headers: {
           authorization: 'Bearer ' + destination.key,
@@ -428,12 +445,26 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
         body,
         redirect: 'error',
         signal: abort.signal,
-      })
+      }
+      let upstream = await fetchImpl(upstreamUrl, upstreamInit)
+      let bufferedError = null
+      if (upstream.status === 400 && req.url === '/v1/chat/completions' && destination.endpoint === PROVIDERS.openai.endpoint) {
+        const rejected = await upstream.text()
+        const retryBody = reasoningDisabledRetryBody(body, rejected)
+        const retry = retryBody ? await fetchImpl(upstreamUrl, { ...upstreamInit, body: retryBody }) : null
+        if (retry && retry.status !== 400) upstream = retry
+        else {
+          bufferedError = rejected
+          await retry?.body?.cancel().catch(() => {})
+        }
+      }
       res.writeHead(upstream.status, {
         'content-type': upstream.headers.get('content-type') ?? 'application/json',
         'cache-control': 'no-store',
       })
-      if (upstream.body) {
+      if (bufferedError !== null) {
+        if (!res.destroyed) res.write(bufferedError)
+      } else if (upstream.body) {
         for await (const chunk of upstream.body) {
           if (res.destroyed) break
           if (!res.write(chunk)) await waitForDrainOrClose(res)
