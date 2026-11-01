@@ -50,3 +50,13 @@ test('server/agent identity copy stays neutral, strict, and does not impersonate
   assert.ok(patched.endsWith(' suffix'))
   assert.throws(() => patchUiChunk('chunks/server-SJNWHHV4.js', 'upstream changed'), /unsupported/)
 })
+
+test('quota classifier fast-fails weekly and monthly usage-limit 429s', () => {
+  const original = 'prefix function isQuotaExhaustedError(error){const message=getQuotaMessage(error);if(!message)return false;const lower=message.toLowerCase();return lower.includes("quota")&&(lower.includes("exhausted")||lower.includes("exceeded"))&&(lower.includes("will reset")||lower.includes("reset at"))} suffix'
+  const patched = patchUiChunk('chunks/chunk-NCVLAQE5.js', original)
+  assert.ok(patched.includes('lower.includes("quota")&&(lower.includes("exhausted")||lower.includes("exceeded"))&&(lower.includes("will reset")||lower.includes("reset at"))'), 'existing quota condition must stay intact')
+  assert.ok(patched.includes('||lower.includes("weekly usage limit")||lower.includes("monthly usage limit")'), 'weekly/monthly usage limits must classify as quota exhaustion')
+  assert.ok(patched.startsWith('prefix '))
+  assert.ok(patched.endsWith(' suffix'))
+  assert.throws(() => patchUiChunk('chunks/chunk-NCVLAQE5.js', 'upstream changed'), /unsupported/)
+})
