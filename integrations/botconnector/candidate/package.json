@@ -17,7 +17,7 @@
                     "test":  "node --test test/*.test.mjs",
                     "test:security":  "node --test test/security-e2e.test.mjs test/proxy-mcp-e2e.test.mjs test/trusted-mcp.test.mjs test/proxy.test.mjs",
                     "test:integration":  "node --test test-integration/*.test.mjs",
-                    "build":  "node --check cli.mjs \u0026\u0026 node --check core.mjs \u0026\u0026 node --check proxy.mjs \u0026\u0026 node --check gateway.mjs \u0026\u0026 node --check branding.mjs \u0026\u0026 node --check model-dialog.mjs \u0026\u0026 node --check credentials.mjs \u0026\u0026 node --check dialog-models.mjs \u0026\u0026 node --check providers.mjs \u0026\u0026 node --check provider-cli.mjs \u0026\u0026 node --check startup-menu.mjs",
+                    "build":  "node --check cli.mjs \u0026\u0026 node --check core.mjs \u0026\u0026 node --check proxy.mjs \u0026\u0026 node --check gateway.mjs \u0026\u0026 node --check branding.mjs \u0026\u0026 node --check model-dialog.mjs \u0026\u0026 node --check credentials.mjs \u0026\u0026 node --check dialog-models.mjs \u0026\u0026 node --check providers.mjs \u0026\u0026 node --check provider-cli.mjs \u0026\u0026 node --check startup-menu.mjs \u0026\u0026 node --check openai-responses.mjs",
                     "rebuild":  "npm run build \u0026\u0026 npm test \u0026\u0026 npm pack --ignore-scripts"
                 },
     "license":  "Apache-2.0",
@@ -30,6 +30,7 @@
                   "cli.mjs",
                   "core.mjs",
                   "proxy.mjs",
+                  "openai-responses.mjs",
                   "gateway.mjs",
                   "branding.mjs",
                   "credentials.mjs",

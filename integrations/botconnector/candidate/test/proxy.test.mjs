@@ -144,7 +144,34 @@ const openAiRequest = {
 const postChat = (proxy, request = openAiRequest) => fetch(proxy.baseUrl + '/chat/completions', {
   method: 'POST', headers: { authorization: 'Bearer ' + proxy.token, 'content-type': 'application/json' }, body: JSON.stringify(request),
 })
-const jsonError = (message) => new Response(JSON.stringify({ error: { message } }), { status: 400, headers: { 'content-type': 'application/json' } })
+const jsonError = (message, status = 400) => new Response(JSON.stringify({ error: { message } }), { status, headers: { 'content-type': 'application/json' } })
+const OPENAI_RESPONSES_ONLY_404 = 'This model is not supported in the v1/chat/completions endpoint. Use the v1/responses endpoint instead.'
+const responsesSse = (model, text) => [
+  'event: response.created',
+  `data: {"type":"response.created","response":{"id":"resp_w","object":"response","created_at":1793515625,"model":"${model}","status":"in_progress"}}`,
+  '',
+  'event: response.output_text.delta',
+  `data: {"type":"response.output_text.delta","content_index":0,"delta":${JSON.stringify(text)},"item_id":"msg_w","output_index":0}`,
+  '',
+  'event: response.completed',
+  `data: {"type":"response.completed","response":{"id":"resp_w","object":"response","created_at":1793515625,"status":"completed","model":"${model}","output":[{"id":"msg_w","type":"message","status":"completed","content":[{"type":"output_text","text":${JSON.stringify(text)}}],"role":"assistant"}],"usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11}}}`,
+  '',
+].join('\n')
+const responsesToolSse = (model) => [
+  'event: response.created',
+  `data: {"type":"response.created","response":{"id":"resp_w","object":"response","created_at":1793515625,"model":"${model}","status":"in_progress"}}`,
+  '',
+  'event: response.output_item.added',
+  'data: {"type":"response.output_item.added","item":{"id":"fc_w","type":"function_call","status":"in_progress","arguments":"","call_id":"call_w1","name":"read_file"},"output_index":0,"sequence_number":2}',
+  '',
+  'event: response.function_call_arguments.delta',
+  'data: {"type":"response.function_call_arguments.delta","delta":"{\\"path\\":\\"x\\"}","item_id":"fc_w","output_index":0,"sequence_number":3}',
+  '',
+  'event: response.completed',
+  `data: {"type":"response.completed","response":{"id":"resp_w","object":"response","created_at":1793515625,"status":"completed","model":"${model}","output":[{"id":"fc_w","type":"function_call","status":"completed","arguments":"{\\"path\\":\\"x\\"}","call_id":"call_w1","name":"read_file"}],"usage":{"input_tokens":9,"output_tokens":2,"total_tokens":11}}}`,
+  '',
+].join('\n')
+const sseResponse = (body) => new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
 
 test('proxy retries an OpenAI tool request with reasoning disabled after the chat-completions rejection', async () => {
   const seen = []
@@ -194,7 +221,7 @@ test('proxy retries with reasoning disabled even when the engine sent no reasoni
   } finally { await proxy.close() }
 })
 
-test('proxy keeps the original OpenAI explanation when the reasoning-disabled retry is rejected too', async () => {
+test('proxy keeps the original OpenAI explanation when the reasoning-disabled retry fails for an unrelated reason', async () => {
   const seen = []
   const proxy = await startGatewayProxy({
     key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
@@ -202,7 +229,7 @@ test('proxy keeps the original OpenAI explanation when the reasoning-disabled re
     fetchImpl: async (_url, options) => {
       const body = JSON.parse(options.body.toString())
       seen.push(body)
-      return jsonError(body.reasoning_effort === 'none' ? OPENAI_NONE_UNSUPPORTED : OPENAI_TOOL_REASONING_REJECTION)
+      return jsonError(body.reasoning_effort === 'none' ? "Invalid value for 'temperature'." : OPENAI_TOOL_REASONING_REJECTION)
     },
   })
   try {
@@ -210,8 +237,8 @@ test('proxy keeps the original OpenAI explanation when the reasoning-disabled re
     assert.equal(result.status, 400)
     const text = await result.text()
     assert.match(text, /use \/v1\/responses/, 'the actionable upstream explanation must reach the user')
-    assert.doesNotMatch(text, /does not support 'none'/, 'the retry error must not replace the original one')
-    assert.equal(seen.length, 2)
+    assert.doesNotMatch(text, /temperature/, 'the retry error must not replace the original one')
+    assert.equal(seen.length, 2, 'an unrelated retry failure must not trigger the responses bridge')
   } finally { await proxy.close() }
 })
 
@@ -243,6 +270,169 @@ test('proxy never retries the reasoning rejection for a non-OpenAI endpoint', as
     assert.match(await result.text(), /Function tools with reasoning_effort/)
     assert.equal(seen.length, 1, 'the gateway request must be sent exactly once')
     assert.equal(seen[0].reasoning_effort, 'high')
+  } finally { await proxy.close() }
+})
+
+test('proxy bridges a responses-only OpenAI model and translates the stream back into chat chunks', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url, options) => {
+      seen.push({ url: String(url), body: options.body ? JSON.parse(options.body.toString()) : null })
+      if (String(url).endsWith('/chat/completions')) return jsonError(OPENAI_RESPONSES_ONLY_404, 404)
+      return sseResponse(responsesSse('gpt-5.2-pro', 'OK'))
+    },
+  })
+  try {
+    const result = await postChat(proxy, {
+      model: 'gpt-5.2-pro', max_completion_tokens: 128, stream: true, stream_options: { include_usage: true },
+      messages: [{ role: 'user', content: 'hi' }],
+    })
+    assert.equal(result.status, 200)
+    assert.match(result.headers.get('content-type'), /text\/event-stream/)
+    const text = await result.text()
+    assert.match(text, /"delta":\{"content":"OK"\}/)
+    assert.match(text, /"finish_reason":"stop"/)
+    assert.match(text, /"usage":\{"prompt_tokens":9,"completion_tokens":2,"total_tokens":11\}/)
+    assert.ok(text.trimEnd().endsWith('data: [DONE]'))
+    assert.equal(seen.length, 2)
+    assert.ok(seen[1].url.endsWith('/responses'))
+    assert.deepEqual(seen[1].body.input, [{ role: 'user', content: 'hi' }])
+    assert.equal(seen[1].body.max_output_tokens, 128)
+    assert.equal(seen[1].body.store, false)
+    assert.equal(seen[1].body.stream, true)
+    assert.equal(seen[1].body.messages, undefined)
+    assert.equal(seen[1].body.stream_options, undefined)
+  } finally { await proxy.close() }
+})
+
+test('proxy bridges when the reasoning-disabled retry is refused too', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url, options) => {
+      const body = options.body ? JSON.parse(options.body.toString()) : null
+      seen.push({ url: String(url), body })
+      if (String(url).endsWith('/chat/completions')) return jsonError(body.reasoning_effort === 'none' ? OPENAI_NONE_UNSUPPORTED : OPENAI_TOOL_REASONING_REJECTION)
+      return sseResponse(responsesSse('gpt-6-astra', 'ASTRA-OK'))
+    },
+  })
+  try {
+    const result = await postChat(proxy, { ...openAiRequest, model: 'gpt-6-astra' })
+    assert.equal(result.status, 200)
+    const text = await result.text()
+    assert.match(text, /"content":"ASTRA-OK"/)
+    assert.equal(seen.length, 3, 'chat attempt, reasoning-disabled retry, then the responses bridge')
+    assert.ok(seen[2].url.endsWith('/responses'))
+    assert.equal(seen[2].body.reasoning.effort, 'high', "the engine's reasoning effort survives the bridge (the responses route accepts it)")
+    assert.deepEqual(seen[2].body.tools, [{ type: 'function', name: 'read_file', parameters: { type: 'object', properties: { path: { type: 'string' } } } }])
+  } finally { await proxy.close() }
+})
+
+test('bridged tool calls reach the engine as chat tool_calls deltas', async () => {
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url, options) => {
+      if (String(url).endsWith('/chat/completions')) {
+        const body = JSON.parse(options.body.toString())
+        return jsonError(body.reasoning_effort === 'none' ? OPENAI_NONE_UNSUPPORTED : OPENAI_TOOL_REASONING_REJECTION)
+      }
+      return sseResponse(responsesToolSse('gpt-6-astra'))
+    },
+  })
+  try {
+    const result = await postChat(proxy, { ...openAiRequest, model: 'gpt-6-astra' })
+    assert.equal(result.status, 200)
+    const text = await result.text()
+    assert.match(text, /"tool_calls":\[\{"index":0,"id":"call_w1","type":"function","function":\{"name":"read_file","arguments":""\}\}\]/)
+    assert.match(text, /"tool_calls":\[\{"index":0,"function":\{"arguments":"\{\\"path\\":\\"x\\"\}"\}\}\]/)
+    assert.match(text, /"finish_reason":"tool_calls"/)
+  } finally { await proxy.close() }
+})
+
+test('after one bridge the same model routes straight to the Responses endpoint', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url, options) => {
+      seen.push(String(url))
+      if (String(url).endsWith('/chat/completions')) return jsonError(OPENAI_RESPONSES_ONLY_404, 404)
+      return sseResponse(responsesSse('gpt-5.2-pro', 'OK'))
+    },
+  })
+  try {
+    const request = { model: 'gpt-5.2-pro', max_completion_tokens: 128, stream: true, messages: [{ role: 'user', content: 'hi' }] }
+    const first = await postChat(proxy, request)
+    assert.equal(first.status, 200)
+    await first.text()
+    const second = await postChat(proxy, request)
+    assert.equal(second.status, 200)
+    await second.text()
+    assert.equal(seen.filter((url) => url.endsWith('/chat/completions')).length, 1, 'the known responses-only model must not pay the chat round trip again')
+    assert.equal(seen.filter((url) => url.endsWith('/responses')).length, 2)
+  } finally { await proxy.close() }
+})
+
+test('proxy never bridges to /responses for a non-OpenAI endpoint', async () => {
+  const seen = []
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    fetchImpl: async (url, options) => {
+      seen.push(String(url))
+      return jsonError(OPENAI_RESPONSES_ONLY_404, 404)
+    },
+  })
+  try {
+    const result = await postChat(proxy, { model: 'gpt-5.2-pro', max_completion_tokens: 128, stream: true, messages: [{ role: 'user', content: 'hi' }] })
+    assert.equal(result.status, 404)
+    assert.match(await result.text(), /not supported in the v1\/chat\/completions endpoint/)
+    assert.equal(seen.length, 1)
+  } finally { await proxy.close() }
+})
+
+test('a failing Responses bridge surfaces the Responses error, not the stale chat one', async () => {
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url) => {
+      if (String(url).endsWith('/chat/completions')) return jsonError(OPENAI_RESPONSES_ONLY_404, 404)
+      return jsonError('Unsupported value: max_output_tokens is too large.', 400)
+    },
+  })
+  try {
+    const result = await postChat(proxy, { model: 'gpt-5.2-pro', max_completion_tokens: 128, stream: true, messages: [{ role: 'user', content: 'hi' }] })
+    assert.equal(result.status, 400)
+    assert.match(await result.text(), /max_output_tokens is too large/)
+  } finally { await proxy.close() }
+})
+
+test('a non-streaming bridged request gets a translated chat completion body', async () => {
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY_STAYS_HERE', token: 'LOCAL_SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai',
+    fetchImpl: async (url, options) => {
+      if (String(url).endsWith('/chat/completions')) return jsonError(OPENAI_RESPONSES_ONLY_404, 404)
+      assert.equal(JSON.parse(options.body.toString()).stream, false)
+      return new Response(JSON.stringify({
+        id: 'resp_n', model: 'gpt-5.2-pro', created_at: 1793515625, status: 'completed',
+        output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'NONSTREAM-OK' }] }],
+        usage: { input_tokens: 9, output_tokens: 2, total_tokens: 11 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    },
+  })
+  try {
+    const result = await postChat(proxy, { model: 'gpt-5.2-pro', max_completion_tokens: 128, stream: false, messages: [{ role: 'user', content: 'hi' }] })
+    assert.equal(result.status, 200)
+    assert.match(result.headers.get('content-type'), /application\/json/)
+    const chat = await result.json()
+    assert.equal(chat.object, 'chat.completion')
+    assert.equal(chat.choices[0].message.content, 'NONSTREAM-OK')
+    assert.equal(chat.choices[0].finish_reason, 'stop')
+    assert.deepEqual(chat.usage, { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 })
   } finally { await proxy.close() }
 })
 
