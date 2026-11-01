@@ -21,6 +21,7 @@ const SOURCE_HASHES = Object.freeze({
   'chunks/chunk-QUFSNRKR.js': 'f52e1917c7956b02208b39982bbf7b45fb52c294418ebd93f7f2f0677c1aaa2d',
   'chunks/chunk-2PLSL3VQ.js': 'f475f043f1ab8314a64699ebb45e43026bb1a1fe65f1ac259f1898afb8a6c5d9',
   'chunks/chunk-ERV2ECV3.js': '7d2511a8317ee2c44edd2fd62b43966b9acfbfaac79175cd0cc9fb9ed42051c6',
+  'chunks/chunk-NCVLAQE5.js': '1dc10e64b04db48ffb4cca02b1a32e5d6395d67ab15ccf175d80f7b4aad8d9af',
   'chunks/server-SJNWHHV4.js': '42ceeddc69dda95fbaac276cbd94e99432892305d169d248e760c9d94aab6eaf',
   'chunks/en-SBI6QJ2J.js': '85fb77f8a9c0fc864f53a55d8a819dfb6ddb98a0c78ef1eaa9af306b313aa6e8',
   'locales/en.js': 'd42369efe23514787a74aa4fb3b63ad339b8ec29edf5973c6aeecd8649a21639',
@@ -33,7 +34,7 @@ const SOURCE_HASHES = Object.freeze({
   'chunks/chunk-B3ZFUGTC.js': 'f3f57aafbaeab56ca58f5d3173751d30e5fef815aeaf8dc9b46e6ea9e85eb528',
   'chunks/chunk-GGVWG4SI.js': '945c7f4e9b3697003c165b7bc5d007c9b87140d1fad7be084d7b253d8d2b476c',
 })
-const BRAND_REVISION = 'bccli-20261101-model-picker-persist-v19'
+const BRAND_REVISION = 'bccli-20261101-quota-fastfail-v20'
 // Deliberately not Qwen's blue→purple→rose gradient. BotConnector-facing
 // coding CLI uses a distinct teal→green→amber palette in dark/light themes.
 export const BCCLI_COLORS = Object.freeze(['#00AFA0', '#22C55E', '#EAB308'])
@@ -226,6 +227,16 @@ export function patchUiChunk(file, text) {
       'var currentMemoryFilename=[DEFAULT_CONTEXT_FILENAME,AGENT_CONTEXT_FILENAME];',
       'var currentMemoryFilename=[AGENT_CONTEXT_FILENAME,DEFAULT_CONTEXT_FILENAME];',
       'AGENTS.md preferred context and backward-compatible QWEN.md fallback')
+  }
+  if (file === 'chunks/chunk-NCVLAQE5.js') {
+    // Hard weekly/monthly usage caps (e.g. Ollama Cloud) never clear by
+    // waiting, so the 10x60s rate-limit retry loop only hangs the session.
+    // Classify their exact phrasing as quota exhaustion to fast-fail.
+    return replaceOnce(
+      text,
+      'return lower.includes("quota")&&(lower.includes("exhausted")||lower.includes("exceeded"))&&(lower.includes("will reset")||lower.includes("reset at"))',
+      'return lower.includes("quota")&&(lower.includes("exhausted")||lower.includes("exceeded"))&&(lower.includes("will reset")||lower.includes("reset at"))||lower.includes("weekly usage limit")||lower.includes("monthly usage limit")',
+      'weekly/monthly usage-limit quota fast-fail')
   }
   if ([
     'chunks/acpAgent-U6TCKYWP.js',

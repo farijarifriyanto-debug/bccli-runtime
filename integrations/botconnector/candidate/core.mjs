@@ -172,10 +172,13 @@ export async function discoverModels({ key, fetchImpl = fetch, endpoint = GATEWA
   return [...models.values()]
 }
 
-export function selectModel(models, value) {
+export function selectModel(models, value, providerId) {
   if (!value) throw Error('Select a model with --model ID or BOTCONNECTOR_MODEL_ID; run models first.')
   if (!MODEL_ID.test(value)) throw Error('Invalid model ID.')
-  if (!models.some((item) => item.id === value)) throw Error('Model is not available for this BotConnector API key.')
+  if (!models.some((item) => item.id === value)) {
+    const label = providerId && providerId !== 'botconnector' ? providerId : 'BotConnector'
+    throw Error(`Model is not available for this ${label} API key.`)
+  }
   return value
 }
 

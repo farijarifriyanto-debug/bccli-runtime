@@ -4,6 +4,7 @@ import { GATEWAY } from './gateway.mjs'
 import { ALLOWED_PROVIDER_ENDPOINTS, PROVIDERS, listProviderDefinitions, providerDefinition, registerCustomProvider, approvedProviderEndpoint, resolveProvider, isConfigured, useProvider, saveSelectedModel, saveProviderKey, removeProvider } from './providers.mjs'
 import { promptProviderKey, confirmRemoveProviderKey, promptCustomProvider } from './native-key-dialog.mjs'
 import { searchWithBrave, validateSearchQuery } from './web-search-backend.mjs'
+import { RESPONSES_ONLY_REJECTION, REASONING_NONE_UNSUPPORTED, toResponsesRequest, createResponsesChatTranslator, responsesJsonToChat } from './openai-responses.mjs'
 
 // This proxy lives only for one Qwen Code session. Real provider keys remain in
 // the launcher process; MCP and bash subprocesses can see only a short-lived
@@ -85,7 +86,7 @@ export function attachRuntimeModelContext(payload) {
 // output conservatively for coding-agent interoperability; never increase it.
 // This does not change the context window or input-token budget.
 const DEFAULT_OUTPUT_TOKEN_CEILING = 4096
-export function boundChatOutputTokens(payload) {
+export function boundChatOutputTokens(payload, { endpoint } = {}) {
   if (!payload || typeof payload !== 'object') return payload
   const legacy = payload.max_tokens
   const modern = payload.max_completion_tokens
@@ -94,7 +95,10 @@ export function boundChatOutputTokens(payload) {
   // Real Gateway's exact Kimi route rejects legacy max_tokens. Keep parity
   // with PAYG validation for positive decimal numeric strings, without
   // changing the output-ceiling policy for any other model.
-  if (payload.model === 'kimi-k2.7-code') {
+  // OpenAI's own API rejects max_tokens on current models while accepting
+  // max_completion_tokens on every model it serves, so match its endpoint
+  // rather than a model list that rots with each release.
+  if (payload.model === 'kimi-k2.7-code' || endpoint === PROVIDERS.openai.endpoint) {
     const parsed = (value) => {
       if (typeof value !== 'number' && !(typeof value === 'string' && /^[0-9]+$/.test(value))) return null
       const n = Number(value)
@@ -118,6 +122,22 @@ export function boundChatOutputTokens(payload) {
     return { ...payload, max_completion_tokens: DEFAULT_OUTPUT_TOKEN_CEILING }
   }
   return payload
+}
+
+// OpenAI refuses function tools together with a nonzero reasoning effort on
+// chat/completions, and the same request succeeds with reasoning disabled.
+// Which models refuse, and which accept 'none' at all, varies per model and
+// changes without notice, so the upstream rejection text is the only signal
+// used here; a retry that is rejected too leaves the original explanation
+// intact because that is the one that tells the user what to do.
+const OPENAI_TOOL_REASONING_REJECTION = /Function tools with reasoning_effort are not supported/
+function reasoningDisabledRetryBody(body, errorText) {
+  if (!OPENAI_TOOL_REASONING_REJECTION.test(errorText)) return null
+  let parsed
+  try { parsed = JSON.parse(body.toString('utf8')) }
+  catch { return null }
+  if (!parsed || typeof parsed !== 'object' || parsed.reasoning_effort === 'none') return null
+  return Buffer.from(JSON.stringify({ ...parsed, reasoning_effort: 'none' }))
 }
 
 function waitForDrainOrClose(res) {
@@ -150,6 +170,9 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
   // HTTPS endpoint must belong to the audited provider allowlist.
   let active = { id: initialProvider, endpoint, key }
   let inFlight = 0
+  // A model proven to answer only on the Responses route goes straight there
+  // on later turns instead of paying the refused chat round trips every time.
+  const responsesOnlyModels = new Set()
   let managingKeys = false
   let credentialRevoked = false
   let searchesUsed = 0
@@ -392,6 +415,7 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
     res.once('close', onClose)
     try {
       let body
+      let parsedBody = null
       if (method === 'POST') {
         const buffers = []
         let bytes = 0
@@ -408,14 +432,15 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
           let parsed
           try { parsed = JSON.parse(body.toString('utf8')) }
           catch { fail(400, 'Invalid JSON request.'); return }
-          const normalized = boundChatOutputTokens(attachRuntimeModelContext(normalizeZeroArgFunctionTools(parsed)))
-          if (normalized !== parsed) body = Buffer.from(JSON.stringify(normalized))
+          parsedBody = boundChatOutputTokens(attachRuntimeModelContext(normalizeZeroArgFunctionTools(parsed)), { endpoint: active.endpoint })
+          if (parsedBody !== parsed) body = Buffer.from(JSON.stringify(parsedBody))
         }
       }
       inFlight += 1
       counted = true
       const destination = active
-      const upstream = await fetchImpl(destination.endpoint + req.url.slice(3), {
+      const upstreamUrl = destination.endpoint + req.url.slice(3)
+      const upstreamInit = {
         method,
         headers: {
           authorization: 'Bearer ' + destination.key,
@@ -425,15 +450,88 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
         body,
         redirect: 'error',
         signal: abort.signal,
+      }
+      // Some current OpenAI models answer only on the Responses route: the pro
+      // and codex models refuse chat/completions outright, and two reasoning
+      // models refuse both the tools+effort combination and the 'none' retry.
+      // The bridge is reactive (the upstream refusal text is the trigger, never
+      // a model list) and scoped to OpenAI's own endpoint, so every other
+      // upstream keeps exactly the behavior it has today.
+      const openAiChat = req.url === '/v1/chat/completions' && destination.endpoint === PROVIDERS.openai.endpoint && parsedBody !== null
+      const sendResponsesRoute = () => fetchImpl(destination.endpoint + '/responses', {
+        ...upstreamInit,
+        body: Buffer.from(JSON.stringify(toResponsesRequest(parsedBody))),
       })
-      res.writeHead(upstream.status, {
-        'content-type': upstream.headers.get('content-type') ?? 'application/json',
-        'cache-control': 'no-store',
-      })
-      if (upstream.body) {
-        for await (const chunk of upstream.body) {
-          if (res.destroyed) break
-          if (!res.write(chunk)) await waitForDrainOrClose(res)
+      let upstream
+      let bufferedError = null
+      let bufferedStatus = null
+      let viaResponses = false
+      if (openAiChat && responsesOnlyModels.has(parsedBody.model)) {
+        upstream = await sendResponsesRoute()
+        if (upstream.ok) viaResponses = true
+        else {
+          bufferedStatus = upstream.status
+          bufferedError = await upstream.text()
+        }
+      } else {
+        upstream = await fetchImpl(upstreamUrl, upstreamInit)
+      }
+      if (bufferedError === null && !viaResponses && openAiChat && (upstream.status === 400 || upstream.status === 404)) {
+        const rejected = await upstream.text()
+        let bridge = null
+        if (RESPONSES_ONLY_REJECTION.test(rejected)) {
+          bridge = await sendResponsesRoute()
+        } else if (upstream.status === 400) {
+          const retryBody = reasoningDisabledRetryBody(body, rejected)
+          const retry = retryBody ? await fetchImpl(upstreamUrl, { ...upstreamInit, body: retryBody }) : null
+          if (retry && retry.status !== 400) upstream = retry
+          else if (retry) {
+            const retryRejected = await retry.text()
+            if (REASONING_NONE_UNSUPPORTED.test(retryRejected)) bridge = await sendResponsesRoute()
+            else bufferedError = rejected
+          } else bufferedError = rejected
+        } else bufferedError = rejected
+        if (bridge) {
+          if (bridge.ok) {
+            upstream = bridge
+            viaResponses = true
+            responsesOnlyModels.add(parsedBody.model)
+          } else {
+            bufferedStatus = bridge.status
+            bufferedError = await bridge.text()
+          }
+        }
+      }
+      if (bufferedError !== null) {
+        res.writeHead(bufferedStatus ?? upstream.status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+        if (!res.destroyed) res.write(bufferedError)
+      } else if (viaResponses) {
+        if (parsedBody.stream) {
+          res.writeHead(upstream.status, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' })
+          const translator = createResponsesChatTranslator({ includeUsage: parsedBody.stream_options?.include_usage === true })
+          const decoder = new TextDecoder()
+          for await (const piece of upstream.body) {
+            if (res.destroyed) break
+            const translated = translator.push(decoder.decode(piece, { stream: true }))
+            if (translated && !res.write(translated)) await waitForDrainOrClose(res)
+          }
+          const tail = translator.push(decoder.decode()) + translator.finish()
+          if (tail && !res.destroyed) res.write(tail)
+        } else {
+          const translated = responsesJsonToChat(await upstream.json())
+          res.writeHead(upstream.status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          if (!res.destroyed) res.write(JSON.stringify(translated))
+        }
+      } else {
+        res.writeHead(upstream.status, {
+          'content-type': upstream.headers.get('content-type') ?? 'application/json',
+          'cache-control': 'no-store',
+        })
+        if (upstream.body) {
+          for await (const chunk of upstream.body) {
+            if (res.destroyed) break
+            if (!res.write(chunk)) await waitForDrainOrClose(res)
+          }
         }
       }
       res.end()

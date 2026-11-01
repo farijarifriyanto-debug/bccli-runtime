@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { boundChatOutputTokens } from '../proxy.mjs'
+import { PROVIDERS } from '../providers.mjs'
+import { GATEWAY } from '../core.mjs'
 
 test('cap oversized Qwen max_tokens without altering tools, model, or input', () => {
   const input = { model: 'glm-5.3-flash', max_tokens: 64000, messages: [{role:'user',content:'test'}], tools: [{type:'function',function:{name:'read_file'}}] }
@@ -53,4 +55,27 @@ test('Kimi modern output cap remains bounded and never increases request', () =>
   const fixed=boundChatOutputTokens({...original,max_completion_tokens:10000})
   assert.equal(fixed.max_completion_tokens,4096)
   assert.equal(Object.hasOwn(fixed,'max_tokens'),false)
+})
+
+test('OpenAI endpoint uses max_completion_tokens, not rejected max_tokens', () => {
+  const endpoint=PROVIDERS.openai.endpoint
+  const request={model:'gpt-6-luna',max_tokens:64000,messages:[{role:'user',content:'hello'}],tools:[{type:'function',function:{name:'read_file'}}]}
+  const fixed=boundChatOutputTokens(request,{endpoint})
+  assert.equal(fixed.max_completion_tokens,4096)
+  assert.equal(Object.hasOwn(fixed,'max_tokens'),false)
+  assert.strictEqual(fixed.messages,request.messages)
+  assert.strictEqual(fixed.tools,request.tools)
+  assert.equal(request.max_tokens,64000)
+  assert.equal(boundChatOutputTokens({model:'gpt-4.1',max_tokens:256},{endpoint}).max_completion_tokens,256)
+  assert.equal(boundChatOutputTokens({model:'gpt-5-mini',max_completion_tokens:128},{endpoint}).max_completion_tokens,128)
+  assert.equal(boundChatOutputTokens({model:'gpt-5-mini',max_tokens:64000,max_completion_tokens:99999},{endpoint}).max_completion_tokens,4096)
+  const noLimit={model:'gpt-6-luna',messages:[{role:'user',content:'hello'}]}
+  assert.strictEqual(boundChatOutputTokens(noLimit,{endpoint}),noLimit)
+})
+
+test('OpenAI translation is scoped to the OpenAI endpoint, not to model names', () => {
+  const request={model:'gpt-6-luna',max_tokens:64000}
+  assert.equal(boundChatOutputTokens(request).max_tokens,4096)
+  assert.equal(boundChatOutputTokens(request,{endpoint:GATEWAY}).max_tokens,4096)
+  assert.equal(Object.hasOwn(boundChatOutputTokens(request,{endpoint:GATEWAY}),'max_completion_tokens'),false)
 })

@@ -110,7 +110,7 @@ async function main() {
     const requested = args.model ??
       (providerId === 'botconnector' ? (process.env.BOTCONNECTOR_MODEL_ID ?? DEFAULT_MODEL) : undefined)
     if (!requested) throw Error('Use --model MODEL_ID for ' + providerId + '.')
-    chosen = { providerId, model: selectModel(models, requested), key: profile.key, endpoint: profile.endpoint }
+    chosen = { providerId, model: selectModel(models, requested, providerId), key: profile.key, endpoint: profile.endpoint }
   }
   const entrypoint = prepareBrandedQwen(resolveQwenEntrypoint())
   let continueSession = args.command === 'resume'
