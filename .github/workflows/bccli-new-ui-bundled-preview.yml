@@ -49,7 +49,7 @@ jobs:
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'bccli-bundled-054-rc1'
-          $archive = Join-Path $out 'botconnector-bccli-0.5.6-rc.1.tgz'
+          $archive = Join-Path $out 'botconnector-bccli-0.5.7-rc.1.tgz'
           if (-not (Test-Path $archive)) { throw 'Preview artifact missing' }
           $install = Join-Path $env:RUNNER_TEMP 'bccli-bundled-preview-installed'
           New-Item -ItemType Directory -Path $install -Force | Out-Null
@@ -57,7 +57,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $packagePath = Join-Path $install 'node_modules/@botconnector/bccli'
           $metadata = Get-Content (Join-Path $packagePath 'package.json') -Raw | ConvertFrom-Json
-          if ($metadata.version -ne '0.5.6-rc.1') { throw 'Wrong preview version' }
+          if ($metadata.version -ne '0.5.7-rc.1') { throw 'Wrong preview version' }
           foreach ($entry in @('engine/cli-entry.js','engine/LICENSE','engine/package.json','legacy/dist/cli.js','legacy/dist/sdk.js','legacy/LICENSE','atomic-patch.mjs','apply-patch-tool.mjs','bccli-bootstrap.cjs','session-settings.mjs')) {
             if (-not (Test-Path (Join-Path $packagePath $entry))) { throw "Missing bundled runtime file: $entry" }
           }
@@ -65,37 +65,37 @@ jobs:
           if (@($deps | Where-Object { $_ -like '@qwen-code/*' }).Count -gt 0) { throw 'Qwen npm dependency must be absent' }
           if (Test-Path (Join-Path $install 'node_modules/@qwen-code')) { throw 'Unexpected Qwen node_modules scope' }
           $v = (& node (Join-Path $packagePath 'cli.mjs') --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $v -ne '0.5.6-rc.1') { throw "Unexpected installed CLI version: $v" }
+          if ($LASTEXITCODE -ne 0 -or $v -ne '0.5.7-rc.1') { throw "Unexpected installed CLI version: $v" }
           Push-Location $install
           try {
             & node --input-type=module -e "import('@botconnector/bccli').then(m=>{if(typeof m.runTask!=='function'||typeof m.streamTask!=='function')process.exit(1)})"
             if ($LASTEXITCODE -ne 0) { throw 'Stable SDK exports missing' }
           } finally { Pop-Location }
           Write-Output 'PASS: new BCCLI UI source, offline package integrity, no npm audio hook, installed SDK and CLI'
-      - name: Build and smoke-test BCCLI 0.5.6 stable release artifact (unpublished)
+      - name: Build and smoke-test BCCLI 0.5.7 stable release artifact (unpublished)
         shell: pwsh
         run: |
           $out = Join-Path $env:RUNNER_TEMP 'bccli-full-engine-054-stable'
           & node integrations/botconnector/release/prepare-preview-ui.mjs --out $out --release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $archive = Join-Path $out 'botconnector-bccli-0.5.6.tgz'
-          if (-not (Test-Path $archive)) { throw 'Stable 0.5.6 archive is missing' }
+          $archive = Join-Path $out 'botconnector-bccli-0.5.7.tgz'
+          if (-not (Test-Path $archive)) { throw 'Stable 0.5.7 archive is missing' }
           $install = Join-Path $env:RUNNER_TEMP 'bccli-full-engine-054-installed'
           New-Item -ItemType Directory -Force -Path $install | Out-Null
           & npm install --prefix $install --ignore-scripts --no-audit --no-fund $archive
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pkg = Join-Path $install 'node_modules/@botconnector/bccli'
           $metadata = Get-Content (Join-Path $pkg 'package.json') -Raw | ConvertFrom-Json
-          if ($metadata.version -ne '0.5.6' -or $metadata.publishConfig.tag -ne 'latest' -or $metadata.bin.bccli -ne './bccli-bootstrap.cjs') { throw 'Stable release metadata mismatch' }
+          if ($metadata.version -ne '0.5.7' -or $metadata.publishConfig.tag -ne 'latest' -or $metadata.bin.bccli -ne './bccli-bootstrap.cjs') { throw 'Stable release metadata mismatch' }
           foreach ($file in @('web-search-backend.mjs','web-search-tool.mjs','engine/cli-entry.js','engine/LICENSE','legacy/dist/sdk.js','atomic-patch.mjs','apply-patch-tool.mjs','bccli-bootstrap.cjs','session-settings.mjs')) {
             if (-not (Test-Path (Join-Path $pkg $file))) { throw "Missing stable runtime file: $file" }
           }
           if (Test-Path (Join-Path $install 'node_modules/@qwen-code')) { throw 'Unexpected @qwen-code npm install' }
           $v = (& node (Join-Path $pkg 'cli.mjs') --version | Out-String).Trim()
-          if ($LASTEXITCODE -ne 0 -or $v -ne '0.5.6') { throw "Installed version is not 0.5.6: $v" }
+          if ($LASTEXITCODE -ne 0 -or $v -ne '0.5.7') { throw "Installed version is not 0.5.7: $v" }
           Push-Location $install
           try {
             & node --input-type=module -e "import('@botconnector/bccli').then(m=>{if(typeof m.runTask!=='function'||typeof m.streamTask!=='function')process.exit(4)})"
             if ($LASTEXITCODE -ne 0) { throw 'Legacy SDK is missing' }
           } finally { Pop-Location }
-          Write-Output 'PASS: stable 0.5.6 package clean install with model-independent web_search and legacy SDK'
+          Write-Output 'PASS: stable 0.5.7 package clean install with model-independent web_search and legacy SDK'

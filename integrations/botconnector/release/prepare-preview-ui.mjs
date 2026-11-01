@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 
 const rawArgs = process.argv.slice(2)
 const IS_STABLE_RELEASE = rawArgs.at(-1) === '--release'
-const VERSION = IS_STABLE_RELEASE ? '0.5.6' : '0.5.6-rc.1'
+const VERSION = IS_STABLE_RELEASE ? '0.5.7' : '0.5.7-rc.1'
 const ENGINE = '@qwen-code/qwen-code@0.26.3'
 const PINNED_ENGINE_SHA512 = 'sha512-z8dL1+N2eI1RwQm/tceJmFbxPtdin4TKpFucoau8Nl4bm/DsXsohQLFPM45t20sVzAaYg8aH8qLpX5RCIiXE3A=='
 const LEGACY = '@botconnector/bccli@0.4.17'
