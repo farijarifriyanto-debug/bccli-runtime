@@ -105,6 +105,8 @@ test('discovery fails closed on invalid keys, no models and 401', async () => {
   const items = [{ id: 'model-1' }]
   assert.equal(selectModel(items, 'model-1'), 'model-1')
   assert.throws(() => selectModel(items, 'not-listed'), /not available/)
+  assert.throws(() => selectModel(items, 'not-listed', 'gmicloud'), /not available for this gmicloud API key/, 'the refusal must name the provider that is actually active')
+  assert.throws(() => selectModel(items, 'not-listed', 'botconnector'), /not available for this BotConnector API key/)
   assert.throws(() => selectModel(items, 'foo\nbar'), /Invalid model ID/)
   assert.throws(() => selectModel(items), /Select a model/)
 })

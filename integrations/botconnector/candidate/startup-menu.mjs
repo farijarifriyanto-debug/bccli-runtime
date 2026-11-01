@@ -32,7 +32,7 @@ export async function autoSelectStartup({
   const models = await list({ key: profile.key, endpoint: profile.endpoint })
   const requested = candidates.find(id => id && models.some(item => item.id === id))
   if (!requested) return undefined
-  return { providerId, model: selectModel(models, requested), key: profile.key, endpoint: profile.endpoint }
+  return { providerId, model: selectModel(models, requested, providerId), key: profile.key, endpoint: profile.endpoint }
 }
 
 export async function terminalQuestion(label, { input = process.stdin, output = process.stdout } = {}) {
@@ -114,7 +114,7 @@ export async function startupMenu({
     }
     const candidate = !value ? preferred : /^[0-9]+$/.test(value) ? filtered[Number(value) - 1]?.id : value
     if (!candidate || !all.some(m => m.id === candidate)) { out('Pilih nomor atau ID model yang tampil.'); continue }
-    selectModel(all, candidate)
+    selectModel(all, candidate, providerId)
     // Save only after authenticated model discovery and selection.
     if (pendingKey) {
       saveKey(providerId, pendingKey)
