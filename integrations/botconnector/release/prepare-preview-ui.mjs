@@ -9,6 +9,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { RUNTIME_FILES } from './runtime-files.mjs'
 
 const rawArgs = process.argv.slice(2)
 const IS_STABLE_RELEASE = rawArgs.at(-1) === '--release'
@@ -67,12 +68,7 @@ assert.ok(existsSync(join(extracted, 'dist', 'sdk.d.ts')))
 assert.ok(existsSync(join(extracted, 'dist', 'cli.js')))
 assert.ok(existsSync(join(extracted, 'LICENSE')))
 
-const files = [
-  'LICENSE','THIRD_PARTY_NOTICES.md','cli.mjs','bccli-bootstrap.cjs','session-settings.mjs','core.mjs','proxy.mjs','openai-responses.mjs',
-  'gateway.mjs','branding.mjs','credentials.mjs','dialog-models.mjs','model-dialog.mjs',
-  'providers.mjs','provider-cli.mjs','startup-menu.mjs','legacy-compat.mjs', 'provider-command.mjs', 'native-key-dialog.mjs', 'provider-dialog.mjs',
-  'atomic-patch.mjs', 'apply-patch-tool.mjs', 'web-search-backend.mjs', 'web-search-tool.mjs',
-]
+const files = [...RUNTIME_FILES, 'bccli-bootstrap.cjs']
 for (const file of files) {
   assert.ok(existsSync(join(source, file)), 'Required BCCLI file missing: ' + file)
   cpSync(join(source, file), join(dest, file))

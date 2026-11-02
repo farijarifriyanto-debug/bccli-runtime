@@ -13,6 +13,7 @@ test('the release version has exactly one source', () => {
 test('release tooling never repeats the release version', () => {
   const files = [
     '../../release/prepare-preview-ui.mjs',
+    '../../release/prepare-next.mjs',
     '../../../../.github/workflows/bccli-new-ui-bundled-preview.yml',
   ]
   for (const file of files) {

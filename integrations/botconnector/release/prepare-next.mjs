@@ -7,6 +7,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { RUNTIME_FILES } from './runtime-files.mjs'
 
 const args = process.argv.slice(2)
 function option(name, fallback) {
@@ -18,9 +19,13 @@ for (const arg of args) {
     throw Error('Supported flags: --source DIRECTORY --out DIRECTORY')
   }
 }
+const RELEASE_VERSION = readFileSync(fileURLToPath(new URL('VERSION', import.meta.url)), 'utf8').trim()
+if (!/^\d+\.\d+\.\d+$/.test(RELEASE_VERSION)) {
+  throw Error('release/VERSION must be a plain semantic version, got: ' + JSON.stringify(RELEASE_VERSION))
+}
+const version = RELEASE_VERSION + '-rc.1'
 const source = resolve(option('--source', fileURLToPath(new URL('../candidate/', import.meta.url))))
-const dest = resolve(option('--out', join(tmpdir(), 'bccli-next-0.5.0-rc.5')))
-const version = '0.5.0-rc.5'
+const dest = resolve(option('--out', join(tmpdir(), 'bccli-next-' + version)))
 const name = '@botconnector/bccli'
 if (!existsSync(join(source, 'package.json'))) throw Error('No candidate source package')
 if (existsSync(dest)) throw Error('Output already exists; refuse to overwrite a previous release candidate')
@@ -28,12 +33,7 @@ const original = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'))
 assert.equal(original.name, '@botconnector/bccli-preview')
 assert.equal(original.version, '0.1.0-rc.3')
 assert.equal(original.dependencies['@qwen-code/qwen-code'], '0.26.3')
-const files = [
-  'LICENSE', 'THIRD_PARTY_NOTICES.md',
-  'cli.mjs', 'core.mjs', 'proxy.mjs', 'gateway.mjs',
-  'branding.mjs', 'credentials.mjs', 'dialog-models.mjs', 'model-dialog.mjs',
-  'providers.mjs', 'provider-cli.mjs', 'startup-menu.mjs',
-]
+const files = [...RUNTIME_FILES]
 mkdirSync(dest, {recursive:true})
 for (const file of files) {
   const path = join(source, file)
