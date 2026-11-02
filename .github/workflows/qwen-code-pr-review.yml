@@ -330,8 +330,13 @@ jobs:
     # (#8945), and precheck-pr's identical predicate only covers fork PRs —
     # without this clause each same-repo sibling run spends an authorize job
     # (permission API + runner slot) before review-pr no-op exits.
+    # `always()`: precheck-pr only runs for fork pull requests, and a skipped
+    # dependency would otherwise take this gate — and with it every manual
+    # entry point, which never runs precheck-pr — down before it evaluates the
+    # principal. The PR-specific clauses below are already vacuous off that
+    # event, so the gate still decides exactly what it decided before.
     if: |-
-      !cancelled() &&
+      always() &&
       (github.event_name != 'pull_request_target' ||
        github.event.action != 'closed') &&
       (github.event_name != 'pull_request_target' ||
