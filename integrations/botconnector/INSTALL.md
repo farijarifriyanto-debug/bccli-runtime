@@ -4,10 +4,10 @@ BCCLI adalah **satu aplikasi CLI**. Pengguna tidak perlu membuat launcher sendir
 
 ## Instalasi normal (Windows, Linux, macOS)
 
-Pastikan Node.js versi yang kompatibel dan `npm` telah terpasang. Gunakan Node.js 22.23.4 atau lebih baru pada lini 22 untuk Windows; pada lini Windows Node.js 24, gunakan 24.22.1 atau lebih baru. Engine mengharuskan Node.js >=22. Pada Linux, Node.js 22.23.2 dan 24.20.0 telah diuji dengan RC.4; RC.5 membutuhkan hasil CI tersendiri. Jika memakai NVM, pilih versi Node.js yang akan digunakan sebelum instalasi karena setiap versi NVM menyimpan paket globalnya secara terpisah.
+Pastikan Node.js versi yang kompatibel dan `npm` telah terpasang. Gunakan Node.js 22.23.4 atau lebih baru pada lini 22 untuk Windows; pada lini Windows Node.js 24, gunakan 24.22.1 atau lebih baru. Engine mengharuskan Node.js >=22. Jika memakai NVM, pilih versi Node.js yang akan digunakan sebelum instalasi karena setiap versi NVM menyimpan paket globalnya secara terpisah.
 
 ```sh
-npm install -g @botconnector/bccli@next
+npm install -g @botconnector/bccli
 bccli
 ```
 
@@ -19,7 +19,7 @@ bccli auth status
 bccli --choose
 ```
 
-`bccli` langsung membuka chat menggunakan provider dan model aktif jika kredensial sudah tersedia. `--choose` hanya untuk mengganti provider/model. Model saat ini diperiksa terhadap daftar model provider. Peringatan instalasi tentang skrip `@qwen-code/audio-capture` adalah dependensi audio opsional, bukan kegagalan instalasi atau alasan mengaktifkan skrip tanpa kebutuhan.
+`bccli` langsung membuka chat menggunakan provider dan model aktif jika kredensial sudah tersedia. `--choose` hanya untuk mengganti provider/model. Model saat ini diperiksa terhadap daftar model provider.
 
 ## Autentikasi pertama kali
 
@@ -31,10 +31,11 @@ Provider pihak ketiga tersedia dalam menu. Penyimpanan API key melalui menu didu
 
 ## Versi dan batasan rilis
 
-- Setelah publikasi RC.5 dan verifikasi registry, `@botconnector/bccli@next` ditargetkan **0.5.0-rc.5**. Sebelum itu, periksa dist-tag dengan `npm view @botconnector/bccli dist-tags`.
-- `@botconnector/bccli@latest` tetap **0.4.17** (stabil); memakai `npm install -g @botconnector/bccli` tanpa `@next` tidak memasang RC.5.
-- Ini prerelease CLI. Kompatibilitas SDK `dist/sdk.js` dari rilis lama belum tersedia dan sejumlah perintah upstream belum diekspos; jangan mempromosikannya sebagai rilis stabil.
+- Versi yang dibangun dan diuji CI dibaca dari satu berkas: `integrations/botconnector/release/VERSION`. Untuk memotong rilis berikutnya, ubah berkas itu satu baris dan tambahkan `integrations/botconnector/release/NOTES-<versi>.md`. Tidak ada versi lain yang ditulis di skrip rilis atau workflow.
+- Periksa tag distribusi sebelum memasang: `npm view @botconnector/bccli dist-tags`.
+- `latest` menunjuk ke rilis stabil; pasang tanpa tag: `npm install -g @botconnector/bccli`.
+- Ini CLI dengan engine bawaan yang diverifikasi; paket legacy 0.4.17 dipin integritasnya sebagai lapisan kompatibilitas SDK, bukan aplikasi kedua.
 - Uninstall standar: `npm uninstall -g @botconnector/bccli`.
-- Dependensi `@qwen-code/qwen-code@0.26.3` adalah engine internal BCCLI, bukan aplikasi BCCLI kedua. Lisensi dan atribusi upstream tetap dipertahankan.
+- Dependensi `@qwen-code/qwen-code` adalah engine internal BCCLI yang dibundel, bukan aplikasi BCCLI kedua. Lisensi dan atribusi upstream tetap dipertahankan.
 
-Paket dan checksum resmi: https://github.com/farijarifriyanto-debug/bccli-runtime/releases/tag/bccli-v0.5.0-rc.5
+Paket dan checksum resmi: https://github.com/farijarifriyanto-debug/bccli-runtime/releases

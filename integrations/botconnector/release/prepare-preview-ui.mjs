@@ -12,7 +12,13 @@ import { fileURLToPath } from 'node:url'
 
 const rawArgs = process.argv.slice(2)
 const IS_STABLE_RELEASE = rawArgs.at(-1) === '--release'
-const VERSION = IS_STABLE_RELEASE ? '0.5.7' : '0.5.7-rc.1'
+// Single source of truth for the shipped version. Bump this file (and add
+// release/NOTES-<version>.md) to cut the next release; nothing else hard-codes it.
+const RELEASE_VERSION = readFileSync(fileURLToPath(new URL('VERSION', import.meta.url)), 'utf8').trim()
+if (!/^\d+\.\d+\.\d+$/.test(RELEASE_VERSION)) {
+  throw Error('release/VERSION must be a plain semantic version, got: ' + JSON.stringify(RELEASE_VERSION))
+}
+const VERSION = IS_STABLE_RELEASE ? RELEASE_VERSION : RELEASE_VERSION + '-rc.1'
 const ENGINE = '@qwen-code/qwen-code@0.26.3'
 const PINNED_ENGINE_SHA512 = 'sha512-z8dL1+N2eI1RwQm/tceJmFbxPtdin4TKpFucoau8Nl4bm/DsXsohQLFPM45t20sVzAaYg8aH8qLpX5RCIiXE3A=='
 const LEGACY = '@botconnector/bccli@0.4.17'
