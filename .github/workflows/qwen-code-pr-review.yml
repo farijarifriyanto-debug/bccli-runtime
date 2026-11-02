@@ -341,8 +341,7 @@ jobs:
        github.event.action != 'review_requested' ||
        github.event.requested_reviewer.login == 'qwen-code-ci-bot') &&
       (github.event_name == 'pull_request_target' ||
-       (github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.command == 'resolve') ||
+       github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
         (startsWith(github.event.comment.body, '@qwen-code /review') ||
