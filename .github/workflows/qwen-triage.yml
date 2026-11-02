@@ -428,28 +428,33 @@ jobs:
             echo "Failed to post disabled-lane notice; continuing." >&2
 
   triage_credentials:
-    # Triage is a model-backed bot. When no model credential is configured the
-    # action exits within a couple of seconds and every pull request shows a red
-    # check that can never pass, which every reader has to re-diagnose. A job
-    # `if` cannot read `secrets`, so presence is resolved in this small job and
-    # consumed through its output. Fail-closed on purpose: if the probe itself
-    # ever breaks, triage is skipped rather than failing.
+    # Triage is a model-backed bot that publishes its result as a comment under
+    # its own bot identity. It needs both a model credential and a bot token: a
+    # job `if` cannot read `secrets`, so presence is resolved here and consumed
+    # through the output. Without the token a run spends model credits and
+    # nothing is posted (the skill refuses to author comments under a substitute
+    # identity), so that case is skipped rather than run. Fail-closed on
+    # purpose: if the probe itself ever breaks, triage is skipped.
     runs-on: 'ubuntu-latest'
     permissions: {}
     outputs:
       model_available: '${{ steps.probe.outputs.present }}'
     steps:
-      - name: 'Probe the model credential'
+      - name: 'Probe the model credential and the bot identity'
         id: 'probe'
         env:
           MODEL_KEY: '${{ secrets.OPENAI_API_KEY }}'
+          BOT_TOKEN: '${{ secrets.QWEN_CODE_BOT_TOKEN || secrets.CI_BOT_PAT }}'
         run: |-
-          if [ -n "${MODEL_KEY}" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-            echo "A model credential is configured; triage can run."
-          else
+          if [ -z "${MODEL_KEY}" ]; then
             echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "::notice title=Triage skipped::No model credential (OPENAI_API_KEY) is configured for this repository, so triage cannot call a model. Add the secret to enable triage."
+            echo "::notice title=Triage skipped::No model credential (OPENAI_API_KEY) is configured for this repository, so triage cannot call a model."
+          elif [ -z "${BOT_TOKEN}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Triage skipped::A model credential is configured, but no bot token (QWEN_CODE_BOT_TOKEN or CI_BOT_PAT) is. Triage authors its comments under that bot identity and deliberately refuses to post under a substitute one, so a run here would spend model credits and publish nothing. Add the token to enable triage."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            echo "Model credential and bot identity are configured; triage can run."
           fi
 
   triage:
