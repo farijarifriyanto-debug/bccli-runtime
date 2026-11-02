@@ -507,7 +507,11 @@ jobs:
     # Tunable via the `QWEN_REVIEW_JOB_TIMEOUT_MINUTES` repository variable
     # (default: 360); must stay above QWEN_REVIEW_MAX_TIMEOUT_MINUTES so
     # retry plus posting never hit the cap.
-    timeout-minutes: '${{ fromJSON(vars.QWEN_REVIEW_JOB_TIMEOUT_MINUTES) }}'
+    # The fallback keeps a fresh fork working: without a value here the job
+    # cannot be scheduled at all - fromJSON('') fails, and a job whose
+    # configuration cannot be evaluated is absent rather than failed, which
+    # reads as "the workflow did nothing" with no log and no annotation.
+    timeout-minutes: "${{ fromJSON(vars.QWEN_REVIEW_JOB_TIMEOUT_MINUTES || '360') }}"
     # The schedule switches hk1/hk2 to `ecs-review` at 17:00 Asia/Shanghai
     # and back to CI at 05:00. Reviews queue while the pool is closed.
     runs-on: '${{ (github.repository == ''QwenLM/qwen-code'' && vars.MAINTAINER_ECS_RUNNER_DISABLED != ''true'') && fromJSON(''["self-hosted", "linux", "x64", "ecs-review"]'') || fromJSON(''["ubuntu-latest"]'') }}'
