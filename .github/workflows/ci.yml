@@ -18,11 +18,19 @@ on:
   push:
     branches:
       - 'main'
+      # This fork integrates on `product`, which is also the repository default.
+      # Without it here, merging a PR there starts no run at all and the merged
+      # tree gets no post-merge gate.
+      - 'product'
   pull_request:
     branches:
       - 'main'
       - 'release/**'
       - 'omni-experiment'
+      # Same reason as `push`: GitHub filters pull_request runs by the *base*
+      # branch, so a PR opened against the default `product` branch produced no
+      # run whatsoever (not a failure, not a skip - no run).
+      - 'product'
   merge_group:
   # The macOS and Windows lanes' ONLY remaining trigger, and therefore this
   # repository's only signal about a host that is not Linux with a GNU
