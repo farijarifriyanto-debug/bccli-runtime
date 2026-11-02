@@ -1,13 +1,14 @@
 name: '🧐 Qwen Pull Request Review'
 
 on:
+  # Automatic reviews are disabled in this repository: a review starts only
+  # when a human asks for one, by comment or by dispatch. `closed` is kept
+  # because it cancels a review that is still running when the pull request
+  # goes away, and spending a review on a closed pull request buys nothing.
+  # With the events below removed, the delay job and the review-requested
+  # branch of the gate no longer fire; re-enabling them is this list only.
   pull_request_target:
     types:
-      - 'opened'
-      - 'synchronize'
-      - 'reopened'
-      - 'ready_for_review'
-      - 'review_requested'
       - 'closed'
   issue_comment:
     types: ['created']
