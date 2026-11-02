@@ -5,15 +5,12 @@ on:
     paths:
       - "integrations/botconnector/**"
       - ".github/workflows/bccli-candidate.yml"
-  push:
-    branches:
-      - "botconnector/compat-poc-20261029"
-      - "release/bccli-preview-v0.1.0-rc.1"
-      - "release/bccli-preview-v0.1.0-rc.2"
-      - "release/bccli-new-v0.1.0-rc.3"
-    paths:
-      - "integrations/botconnector/**"
-      - ".github/workflows/bccli-candidate.yml"
+# No push trigger: the one that used to be here listed only historical
+# integration branches (botconnector/compat-poc-20261029 and three
+# release/bccli-* branches from the 0.5.0-rc era) that never receive another
+# push, so it never fired. Pushes to the live branch, `product`, are covered by
+# bccli-new-ui-bundled-preview.yml, whose matrix is a superset of this one
+# (Ubuntu, Windows and macOS against Node 22 and 24), so it is not duplicated.
 
 permissions:
   contents: read
