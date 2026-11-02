@@ -456,10 +456,14 @@ jobs:
     # - reopened/ready_for_review runs immediately
     # KEEP IN SYNC with ack-review-request.if (explicit-trigger branches) —
     # including the fromJSON newline/CR pair, explained there.
+    # `always()` rather than `!cancelled()`: the config and delay jobs are
+    # conditional, and a skipped dependency otherwise takes this job with it
+    # on every path except a bot-requested review.
     if: |-
-      !cancelled() &&
+      always() &&
       ((github.event_name == 'workflow_dispatch' &&
-       (github.event.inputs.command == 'review' || github.event.inputs.command == '')) ||
+       (github.event.inputs.command == 'review' || github.event.inputs.command == '') &&
+       needs.authorize.outputs.should_review == 'true') ||
       (github.event_name == 'pull_request_target' &&
        github.event.pull_request.state == 'open' &&
        !github.event.pull_request.draft &&
