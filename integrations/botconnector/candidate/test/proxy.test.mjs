@@ -458,3 +458,96 @@ test('proxy sends OpenAI max_completion_tokens upstream instead of rejected max_
     assert.equal(seen[0].model, 'gpt-6-luna')
   } finally { await proxy.close() }
 })
+
+test('provider switch is rate-limited so a hijacked session token cannot silently cycle billing', async () => {
+  let switches = 0
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY', token: 'SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai', liveProvider: true,
+    configured: () => true,
+    resolveProfile: (id) => ({ endpoint: PROVIDERS[id].endpoint, key: 'PROVIDER_KEY_' + id }),
+    selectProvider: () => { switches += 1 }, rememberModel: () => {},
+    fetchImpl: async () => Response.json({ data: [{ id: 'gpt-4.1' }] }),
+  })
+  try {
+    const headers = { authorization: 'Bearer SESSION_TOKEN', 'content-type': 'application/json' }
+    const body = JSON.stringify({ action: 'user-selected-provider', provider: 'openai', model: 'gpt-4.1' })
+    const first = await fetch(proxy.baseUrl + '/bccli/provider/switch', { method: 'POST', headers, body })
+    assert.equal(first.status, 200)
+    assert.equal(switches, 1)
+    const second = await fetch(proxy.baseUrl + '/bccli/provider/switch', { method: 'POST', headers, body })
+    assert.equal(second.status, 429)
+    assert.match((await second.json()).error, /Too soon/)
+    assert.equal(switches, 1)
+  } finally { await proxy.close() }
+})
+
+test('provider switch has a per-session cap independent of the cooldown', async () => {
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY', token: 'SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai', liveProvider: true,
+    configured: () => true,
+    resolveProfile: (id) => ({ endpoint: PROVIDERS[id].endpoint, key: 'PROVIDER_KEY_' + id }),
+    selectProvider: () => {}, rememberModel: () => {},
+    fetchImpl: async () => Response.json({ data: [{ id: 'gpt-4.1' }] }),
+    switchLimits: { cooldownMs: 0, perSession: 2 },
+  })
+  try {
+    const headers = { authorization: 'Bearer SESSION_TOKEN', 'content-type': 'application/json' }
+    const body = JSON.stringify({ action: 'user-selected-provider', provider: 'openai', model: 'gpt-4.1' })
+    assert.equal((await fetch(proxy.baseUrl + '/bccli/provider/switch', { method: 'POST', headers, body })).status, 200)
+    assert.equal((await fetch(proxy.baseUrl + '/bccli/provider/switch', { method: 'POST', headers, body })).status, 200)
+    const third = await fetch(proxy.baseUrl + '/bccli/provider/switch', { method: 'POST', headers, body })
+    assert.equal(third.status, 429)
+    assert.match((await third.json()).error, /limit reached/)
+  } finally { await proxy.close() }
+})
+
+test('native key dialogs are rate-limited and capped against dialog-spam social engineering', async () => {
+  let prompts = 0
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY', token: 'SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai', liveProvider: true,
+    configured: () => true,
+    resolveProfile: (id) => ({ endpoint: PROVIDERS[id].endpoint, key: 'PROVIDER_KEY_' + id }),
+    secureKeyPrompt: async () => { prompts += 1; return null },
+    fetchImpl: async () => Response.json({ data: [{ id: 'gpt-4.1' }] }),
+    dialogLimits: { cooldownMs: 0, perSession: 2 },
+  })
+  try {
+    const headers = { authorization: 'Bearer SESSION_TOKEN', 'content-type': 'application/json' }
+    const body = JSON.stringify({ action: 'user-confirmed-local-key-dialog', provider: 'openai' })
+    const first = await fetch(proxy.baseUrl + '/bccli/provider/key/add', { method: 'POST', headers, body })
+    assert.equal(first.status, 200)
+    assert.equal((await first.json()).cancelled, true)
+    assert.equal(prompts, 1)
+    const second = await fetch(proxy.baseUrl + '/bccli/provider/key/add', { method: 'POST', headers, body })
+    assert.equal(second.status, 200)
+    assert.equal(prompts, 2)
+    const third = await fetch(proxy.baseUrl + '/bccli/provider/key/add', { method: 'POST', headers, body })
+    assert.equal(third.status, 429)
+    assert.match((await third.json()).error, /limit reached/)
+    assert.equal(prompts, 2)
+  } finally { await proxy.close() }
+})
+
+test('native key dialogs refuse an immediate repeat within the cooldown', async () => {
+  let prompts = 0
+  const proxy = await startGatewayProxy({
+    key: 'REAL_KEY', token: 'SESSION_TOKEN',
+    endpoint: PROVIDERS.openai.endpoint, initialProvider: 'openai', liveProvider: true,
+    configured: () => true,
+    resolveProfile: (id) => ({ endpoint: PROVIDERS[id].endpoint, key: 'PROVIDER_KEY_' + id }),
+    secureKeyPrompt: async () => { prompts += 1; return null },
+    fetchImpl: async () => Response.json({ data: [{ id: 'gpt-4.1' }] }),
+  })
+  try {
+    const headers = { authorization: 'Bearer SESSION_TOKEN', 'content-type': 'application/json' }
+    const body = JSON.stringify({ action: 'user-confirmed-local-key-dialog', provider: 'openai' })
+    assert.equal((await fetch(proxy.baseUrl + '/bccli/provider/key/add', { method: 'POST', headers, body })).status, 200)
+    const second = await fetch(proxy.baseUrl + '/bccli/provider/key/add', { method: 'POST', headers, body })
+    assert.equal(second.status, 429)
+    assert.match((await second.json()).error, /Too soon/)
+    assert.equal(prompts, 1)
+  } finally { await proxy.close() }
+})

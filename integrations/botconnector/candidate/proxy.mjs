@@ -160,7 +160,7 @@ function matchesToken(auth, token) {
   return actual.length === expected.length && timingSafeEqual(actual, expected)
 }
 
-export async function startGatewayProxy({ key, endpoint = GATEWAY, token = randomBytes(32).toString('hex'), fetchImpl = fetch, liveProvider = false, initialProvider = 'botconnector', resolveProfile = resolveProvider, configured = isConfigured, selectProvider = useProvider, rememberModel = saveSelectedModel, secureKeyPrompt = promptProviderKey, secureRemoveConfirm = confirmRemoveProviderKey, persistKey = saveProviderKey, deleteKey = removeProvider, promptNewProvider = promptCustomProvider, registerNewProvider = registerCustomProvider, searchApiKey = process.env.BRAVE_SEARCH_API_KEY, searchImpl = searchWithBrave } = {}) {
+export async function startGatewayProxy({ key, endpoint = GATEWAY, token = randomBytes(32).toString('hex'), fetchImpl = fetch, liveProvider = false, initialProvider = 'botconnector', resolveProfile = resolveProvider, configured = isConfigured, selectProvider = useProvider, rememberModel = saveSelectedModel, secureKeyPrompt = promptProviderKey, secureRemoveConfirm = confirmRemoveProviderKey, persistKey = saveProviderKey, deleteKey = removeProvider, promptNewProvider = promptCustomProvider, registerNewProvider = registerCustomProvider, searchApiKey = process.env.BRAVE_SEARCH_API_KEY, searchImpl = searchWithBrave, switchLimits = { cooldownMs: 1000, perSession: 20 }, dialogLimits = { cooldownMs: 1000, perSession: 10 } } = {}) {
   if (!approvedProviderEndpoint(endpoint)) throw Error('Unapproved provider endpoint; local proxy refused to start.')
   if (typeof key !== 'string' || !key.trim()) throw Error('Gateway key is required for local proxy.')
   if (typeof token !== 'string' || token.length < 6 || token === key) throw Error('Invalid or non-isolated proxy token.')
@@ -176,6 +176,37 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
   let managingKeys = false
   let credentialRevoked = false
   let searchesUsed = 0
+  // Provider switching and native key dialogs are meant to be initiated by a
+  // human at this terminal, but the session token is inherited by every engine
+  // subprocess (MCP servers, approved shell commands). A malicious local
+  // process could therefore switch providers silently (billing diversion to
+  // another configured provider) or spam native key dialogs (social
+  // engineering). Keep the operations possible for the user, but bound their
+  // rate so unattended abuse stands out, and never gate the AI request path.
+  let switchesUsed = 0
+  let lastSwitchAt = 0
+  const switchGate = () => {
+    const now = Date.now()
+    if (switchesUsed >= switchLimits.perSession) return 'Session provider-switch limit reached.'
+    if (now - lastSwitchAt < switchLimits.cooldownMs) return 'Too soon; wait a moment before switching providers again.'
+    lastSwitchAt = now
+    switchesUsed += 1
+    return null
+  }
+  let dialogsUsed = 0
+  let lastDialogAt = 0
+  // Cooldown is short on purpose: it exists to break popup bursts, not to slow
+  // a human, who cannot complete one native key dialog in under a second. The
+  // per-session cap is the real stopper. Malformed requests are validated
+  // before this gate so attackers cannot burn the honest user's dialog budget.
+  const dialogGate = () => {
+    const now = Date.now()
+    if (dialogsUsed >= dialogLimits.perSession) return 'Session provider-dialog limit reached.'
+    if (now - lastDialogAt < dialogLimits.cooldownMs) return 'Too soon; wait a moment before opening another provider dialog.'
+    lastDialogAt = now
+    dialogsUsed += 1
+    return null
+  }
   const readLocalAction = async (req, max = 512) => {
     const buffers = []
     let length = 0
@@ -239,6 +270,8 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
       managingKeys = true
       try {
         const id = await readLocalAction(req)
+        const dialogBlock = dialogGate()
+        if (dialogBlock) { fail(429, dialogBlock); return }
         if (req.url.endsWith('/add')) {
           // Only the parent launches this masked native Windows dialog. The
           // child sends only the provider ID, never a user-entered API key.
@@ -299,6 +332,8 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
         for await (const chunk of req) { bytes+=chunk.length;if(bytes>256)throw Error('Too long');parts.push(chunk) }
         const json=JSON.parse(Buffer.concat(parts).toString('utf8'))
         if (Object.keys(json).length!==1 || json.action!=='user-confirmed-local-custom-provider-dialog') throw Error('Bad action')
+        const dialogBlock=dialogGate()
+        if (dialogBlock) { fail(429,dialogBlock);return }
         // This operation can only persist details explicitly entered into the
         // local Windows dialog. No URL or credentials are accepted via HTTP.
         const details=await promptNewProvider()
@@ -330,6 +365,8 @@ export async function startGatewayProxy({ key, endpoint = GATEWAY, token = rando
     if (req.url === '/v1/bccli/provider/switch' && liveProvider && req.method === 'POST') {
       if (inFlight || managingKeys) { fail(409, 'Finish the active AI response or key manager before switching providers.'); return }
       if (Number(req.headers['content-length'] || 0) > 1024) { fail(413, 'Invalid provider selection.'); return }
+      const switchBlock = switchGate()
+      if (switchBlock) { fail(429, switchBlock); return }
       try {
         const buffers = []
         let length = 0
