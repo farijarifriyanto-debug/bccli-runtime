@@ -29,11 +29,25 @@ export function legacyCompatibilityMode(argv) {
   return false
 }
 
+// The 0.4.17 CLI reads its own credential store and, for headless use, the
+// provider API keys from the environment, so those keys must keep flowing to
+// it. What must NOT flow is everything that turns the inherited environment
+// into code or traffic injection: NODE_OPTIONS makes Node load arbitrary
+// modules into the child, and *_BASE_URL / *_ENDPOINT variables silently
+// redirect the legacy client (and its keys) to another host. The new engine
+// child gets a strict allowlist; the compatibility child cannot be that strict
+// without breaking 0.4.17 auth, so it gets this denylist instead.
+const LEGACY_ENV_DENYLIST = /^(NODE_OPTIONS|NODE_PATH|(?:[A-Z0-9]+_)*(?:BASE_URL|BASE_URL_V1|API_BASE|ENDPOINT|ENDPOINT_URL))$/
+
+export function legacyChildEnv(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !LEGACY_ENV_DENYLIST.test(name)))
+}
+
 export async function runLegacyCli(argv, { spawnImpl = spawn, node = process.execPath, env = process.env, cwd = process.cwd() } = {}) {
   const entrypoint = fileURLToPath(new URL('./legacy/dist/cli.js', import.meta.url))
   if (spawnImpl === spawn && !existsSync(entrypoint)) throw Error('Bundled BCCLI compatibility files are missing; reinstall the release package. No AI request was sent.')
   const child = spawnImpl(node, [entrypoint, ...argv], {
-    cwd, env, stdio: 'inherit', shell: false, windowsHide: false,
+    cwd, env: legacyChildEnv(env), stdio: 'inherit', shell: false, windowsHide: false,
   })
   return new Promise((resolve, reject) => {
     child.once('error', reject)
