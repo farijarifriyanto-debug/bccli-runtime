@@ -22,11 +22,22 @@ Changes since 0.5.7:
   candidate suites, built twice with identical sha256 required, clean-install
   smoke-tested, and attached to a draft GitHub release with the reference
   hash. Manual laptop builds are no longer part of the release path.
+- Loopback provider controls are rate-limited: provider switching is capped
+  at 1 per second and 20 per session, and native key dialogs (add/remove key,
+  custom provider) at 1 per second and 10 per session. The session token is
+  inherited by every engine subprocess, so these bounds stop a malicious
+  local process from silently cycling providers (billing diversion) or spam
+  key dialogs. The dialog gate runs after body validation so malformed
+  requests cannot consume the honest user's dialog budget. The legacy
+  plaintext credentials file now produces a stderr warning when other
+  accounts can read it (POSIX mode/owner check; the key is never printed).
 
 Test and release gates:
-- Candidate suite on the change branch: 184 pass / 0 fail (includes the new
-  legacyChildEnv scrub tests and the guard-aware offline smoke test).
-- PR #42 CI: verify matrix 6/6 (3 OS x Node 22/24), windows-candidate 2/2,
-  TUI parity snapshots and OpenTUI no-flicker gates pass.
+- Candidate suite on the change branches: 188 pass / 0 fail (includes the new
+  legacyChildEnv scrub tests, the guard-aware offline smoke test, four
+  rate-limit tests, and the credential-permissions warning test).
+- PR #42 and #44 CI: verify matrix 6/6 (3 OS x Node 22/24),
+  windows-candidate 2/2, TUI parity snapshots and OpenTUI no-flicker gates
+  pass.
 - This is the first release whose artifact comes from the CI double-build
   workflow; the bccli repo publish job pins this commit and the CI sha256.
