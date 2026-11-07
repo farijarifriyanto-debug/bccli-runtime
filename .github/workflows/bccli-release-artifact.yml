@@ -1,0 +1,112 @@
+name: BCCLI release artifact
+
+# Builds the stable @botconnector/bccli release artifact in CI instead of on a
+# maintainer laptop, so the sha256 pinned in the bccli repo publish job refers
+# to a CI-built artifact with an auditable run, not to a manual build.
+#
+# Flow:
+#   1. Bump integrations/botconnector/release/VERSION + add release/NOTES-<v>.md,
+#      merge to product.
+#   2. Dispatch this workflow with confirm_version = that version.
+#   3. The workflow gates on the full candidate test suites, builds the release
+#      tarball TWICE, requires identical sha256, and creates a DRAFT GitHub
+#      release bccli-v<version> with the tarball + SHA256SUMS.txt.
+#   4. A human reviews and publishes the draft release.
+#   5. In the bccli repo, add the publish_0XX job pinning this commit and the
+#      sha256 from the release, then dispatch it.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_version:
+        description: 'Must equal integrations/botconnector/release/VERSION, for example 0.5.8'
+        required: true
+
+permissions:
+  contents: write # draft release creation
+
+concurrency:
+  group: bccli-release-artifact
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: integrations/botconnector/candidate/package-lock.json
+      - name: Confirm the requested version and refuse to overwrite an existing release
+        env:
+          CONFIRM: ${{ inputs.confirm_version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(tr -d '[:space:]' < integrations/botconnector/release/VERSION)"
+          echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::release/VERSION is not a plain semantic version: $version"; exit 1; }
+          [ "$CONFIRM" = "$version" ] || { echo "::error::confirm_version '$CONFIRM' does not match release/VERSION '$version'"; exit 1; }
+          if gh release view "bccli-v$version" >/dev/null 2>&1; then
+            echo "::error::release bccli-v$version already exists; artifacts are immutable, cut a new version instead"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "Release version confirmed: $version"
+      - name: Gate on the candidate suites (build, unit, integration)
+        working-directory: integrations/botconnector/candidate
+        run: |
+          npm ci --ignore-scripts --omit=optional --no-audit --no-fund
+          npm run build
+          npm test
+          npm run test:integration
+      - name: Build the release artifact twice and require identical sha256
+        run: |
+          node integrations/botconnector/release/prepare-preview-ui.mjs --out "$RUNNER_TEMP/build-a" --release
+          node integrations/botconnector/release/prepare-preview-ui.mjs --out "$RUNNER_TEMP/build-b" --release
+          tgz="botconnector-bccli-$VERSION.tgz"
+          sum_a="$(cut -d' ' -f1 "$RUNNER_TEMP/build-a/SHA256SUMS.txt")"
+          sum_b="$(cut -d' ' -f1 "$RUNNER_TEMP/build-b/SHA256SUMS.txt")"
+          [ "$sum_a" = "$sum_b" ] || { echo "::error::two builds from the same tree differ: $sum_a vs $sum_b"; exit 1; }
+          diff -qr --exclude='*.tgz' --exclude='SHA256SUMS.txt' "$RUNNER_TEMP/build-a" "$RUNNER_TEMP/build-b"
+          mkdir -p "$RUNNER_TEMP/release-out"
+          cp "$RUNNER_TEMP/build-a/$tgz" "$RUNNER_TEMP/build-a/SHA256SUMS.txt" "$RUNNER_TEMP/release-out/"
+          echo "ARTIFACT_SHA256=$sum_a" >> "$GITHUB_ENV"
+          echo "Reproducible build confirmed: $sum_a"
+      - name: Smoke-test the built tarball with a clean install
+        run: |
+          tgz="$RUNNER_TEMP/release-out/botconnector-bccli-$VERSION.tgz"
+          install_dir="$RUNNER_TEMP/release-smoke"
+          mkdir -p "$install_dir"
+          npm install --prefix "$install_dir" --ignore-scripts --no-audit --no-fund "$tgz"
+          pkg="$install_dir/node_modules/@botconnector/bccli"
+          [ -f "$pkg/engine/cli-entry.js" ] && [ -f "$pkg/engine/LICENSE" ] && [ -f "$pkg/legacy/dist/cli.js" ] && [ -f "$pkg/legacy/dist/sdk.js" ] && [ -f "$pkg/bccli-bootstrap.cjs" ] || { echo "::error::installed package is missing runtime files"; exit 1; }
+          installed="$(node "$pkg/cli.mjs" --version)"
+          [ "$installed" = "$VERSION" ] || { echo "::error::installed version $installed != $VERSION"; exit 1; }
+          echo "Clean-install smoke passed: $installed"
+      - name: Create the draft release with the artifact and its reference hash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="integrations/botconnector/release/NOTES-$VERSION.md"
+          {
+            echo "Built in CI from commit $GITHUB_SHA (run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo
+            echo "Artifact sha256 (build reproduced twice, identical): $ARTIFACT_SHA256"
+            echo
+            echo "Next steps: review and publish this draft, then add the publish job in the bccli repo pinning commit $GITHUB_SHA and this sha256."
+            echo
+            if [ -f "$notes" ]; then echo "---"; echo; cat "$notes"; fi
+          } > "$RUNNER_TEMP/release-notes.md"
+          gh release create "bccli-v$VERSION" --draft --target "$GITHUB_SHA" \
+            --title "BCCLI $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md" \
+            "$RUNNER_TEMP/release-out/botconnector-bccli-$VERSION.tgz" "$RUNNER_TEMP/release-out/SHA256SUMS.txt"
+      - name: Summary
+        run: |
+          {
+            echo "## BCCLI $VERSION release artifact"
+            echo
+            echo "- sha256: \`$ARTIFACT_SHA256\`"
+            echo "- draft release: bccli-v$VERSION"
+            echo "- commit: $GITHUB_SHA"
+          } >> "$GITHUB_STEP_SUMMARY"

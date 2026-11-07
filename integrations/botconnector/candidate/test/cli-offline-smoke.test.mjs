@@ -5,6 +5,15 @@ import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import test from 'node:test'
+import { assertCandidateRuntimeSupported } from '../core.mjs'
+
+// cli.mjs checks the Windows Node crash guard (core.mjs) before the TTY
+// check, so on win32 + Node 24.0-24.22.0 the guard error is the correct
+// first failure. Both messages share the invariant this test protects:
+// exit 1, explicit message, no AI request.
+function runtimeGuardBlocksThisHost() {
+  try { assertCandidateRuntimeSupported(); return false } catch { return true }
+}
 
 const entry = fileURLToPath(new URL('../cli.mjs', import.meta.url))
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
@@ -77,6 +86,7 @@ test('auth status checks only existing credentials and never prints them or cont
 test('manual --choose menu is explicit and never turns into a non-TTY paid request', () => {
   const run = invoke(['--choose'])
   assert.equal(run.status,1)
-  assert.match(run.stderr,/Interactive mode requires a TTY/)
+  if (runtimeGuardBlocksThisHost()) assert.match(run.stderr,/may crash after coding tools/)
+  else assert.match(run.stderr,/Interactive mode requires a TTY/)
   assert.doesNotMatch(run.stdout+run.stderr,/NOT_A_REAL_SECRET_TOKEN/)
 })
