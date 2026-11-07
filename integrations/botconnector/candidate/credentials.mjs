@@ -25,6 +25,18 @@ export function botConnectorKey({ env = process.env, home = homedir() } = {}) {
   if (!info.isFile() || info.isSymbolicLink() || info.size > MAX_CREDENTIAL_FILE_BYTES) {
     throw Error('Invalid BCCLI credentials file; do not follow symlinks or oversized files.')
   }
+  // The legacy CLI stores this key as plaintext JSON; the best the reader can
+  // do is refuse silence about a file other accounts can read. POSIX only:
+  // Windows ACLs cannot be inspected portably here (and the separate DPAPI
+  // store already covers the new providers). Never fail on this - the file
+  // was written by the 0.4.x CLI the owner chose to run.
+  if (process.platform !== 'win32') {
+    const looseMode = (info.mode & 0o077) !== 0
+    const wrongOwner = typeof process.getuid === 'function' && info.uid !== process.getuid()
+    if (looseMode || wrongOwner) {
+      process.stderr.write('BCCLI: warning: ' + path + ' can be read by other accounts on this machine; consider chmod 600. The key itself was not printed.\n')
+    }
+  }
   let data
   try { data = JSON.parse(readFileSync(path, 'utf8')) }
   catch { throw Error('Existing BCCLI credentials are not valid JSON.') }

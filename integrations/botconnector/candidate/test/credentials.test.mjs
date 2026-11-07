@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtempSync, writeFileSync, symlinkSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, symlinkSync, rmSync, chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { botConnectorKey, botConnectorCredentialStatus } from '../credentials.mjs'
@@ -55,4 +55,26 @@ test('credential status is offline, read-only, and never exposes the long-lived 
     writeFileSync(file,'invalid json')
     assert.equal(botConnectorCredentialStatus({env:{BCCLI_HOME:root},home:root}).configured,false)
   } finally { rmSync(root,{recursive:true,force:true}) }
+})
+
+test('a credential file readable by other accounts still works but warns without printing the key', { skip: process.platform === 'win32' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'bccli-login-perms-'))
+  const originalWrite = process.stderr.write.bind(process.stderr)
+  const warnings = []
+  process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true }
+  try {
+    const file = join(root, 'credentials')
+    writeFileSync(file, JSON.stringify({ 'bc-cloud': 'LOOSE_PERMS_FAKE_KEY' }))
+    chmodSync(file, 0o644)
+    assert.equal(botConnectorKey({ env: { BCCLI_HOME: root }, home: root }), 'LOOSE_PERMS_FAKE_KEY')
+    assert.ok(warnings.some(line => line.includes('chmod 600')))
+    assert.ok(!warnings.join('').includes('LOOSE_PERMS_FAKE_KEY'))
+    warnings.length = 0
+    chmodSync(file, 0o600)
+    assert.equal(botConnectorKey({ env: { BCCLI_HOME: root }, home: root }), 'LOOSE_PERMS_FAKE_KEY')
+    assert.equal(warnings.length, 0)
+  } finally {
+    process.stderr.write = originalWrite
+    rmSync(root, { recursive: true, force: true })
+  }
 })

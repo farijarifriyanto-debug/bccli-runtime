@@ -22,6 +22,12 @@ function localFixture({ promptValue = 'VALID_EXAMPLE_SECRET', approved = true, a
     deleteKey: id => { keys.delete(id);calls.push(['delete',id]) },
     selectProvider: id => changes.push(['provider',id]),
     rememberModel: (id,model) => changes.push(['model',id,model]),
+    // These fixtures resolve native dialogs instantly, which no human can do;
+    // the production cooldown would otherwise rate-limit legitimate quick
+    // add/select/remove sequences. The gates themselves are covered by the
+    // dedicated rate-limit tests in proxy.test.mjs.
+    dialogLimits: { cooldownMs: 0, perSession: 10 },
+    switchLimits: { cooldownMs: 0, perSession: 20 },
     fetchImpl: async (url,req) => {
       calls.push(['fetch',url,req.headers?.authorization])
       if (url.endsWith('/models')) {
